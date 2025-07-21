@@ -1,8 +1,8 @@
 import os
 import json
 import base64
-from flask import Flask, request, jsonify
-from werkzeug.utils import secure_filename
+# from flask import Flask, request, jsonify  # Removed Flask imports
+# from werkzeug.utils import secure_filename  # Moved to new API file
 import PyPDF2
 from PyPDF2 import PdfReader, PdfWriter
 import google.generativeai as genai
@@ -15,21 +15,36 @@ import tempfile
 import shutil
 from dotenv import load_dotenv
 load_dotenv()
+from pymongo import MongoClient
+import datetime
+from datetime import datetime, timezone
+import sys
+import argparse
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-app = Flask(__name__)
+# --- Removed Flask app and route definitions ---
+# app = Flask(__name__)
 
 # Configuration
-UPLOAD_FOLDER = 'uploads'
-PROCESSED_FOLDER = 'processed'
+# UPLOAD_FOLDER = 'uploads'
+# PROCESSED_FOLDER = 'processed'
 ALLOWED_EXTENSIONS = {'pdf', 'png', 'jpg', 'jpeg', 'gif', 'bmp', 'tiff'}
 
+# MongoDB configuration
+MONGO_URI = os.getenv('MONGO_URI', 'mongodb://localhost:27017/')
+MONGO_DB = os.getenv('MONGO_DB', 'document_splitter')
+MONGO_COLLECTION = os.getenv('MONGO_COLLECTION', 'token_usage')
+
+mongo_client = MongoClient(MONGO_URI)
+mongo_db = mongo_client[MONGO_DB]
+token_collection = mongo_db[MONGO_COLLECTION]
+
 # Create directories if they don't exist
-os.makedirs(UPLOAD_FOLDER, exist_ok=True)
-os.makedirs(PROCESSED_FOLDER, exist_ok=True)
+# os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+# os.makedirs(PROCESSED_FOLDER, exist_ok=True)
 
 # Configure Gemini API
 # You need to set your API key as an environment variable or replace with your actual key
@@ -283,7 +298,7 @@ class DocumentProcessor:
                 if not page_numbers:
                     continue
                 # Slugify document_type: lowercase, replace spaces with hyphens
-                doc_type_slug = secure_filename(document_type.lower().replace(' ', '-'))
+                doc_type_slug = document_type.lower().replace(' ', '-')
                 # Page numbers as dash-joined string
                 page_numbers_str = "-".join(str(p) for p in sorted(page_numbers))
                 # Compose new filename
@@ -311,136 +326,121 @@ class DocumentProcessor:
             logger.error(f"Error splitting PDF documents: {e}")
         return output_files
 
-# Initialize processor
-processor = DocumentProcessor()
+    def store_token_usage(self, input_tokens, output_tokens, total_tokens, context=None):
+        """Store token usage in MongoDB"""
+        try:
+            record = {
+                "input_tokens": input_tokens,
+                "output_tokens": output_tokens,
+                "total_tokens": total_tokens,
+                "context": context
+            }
+            token_collection.insert_one(record)
+            logger.info(f"Token usage stored in MongoDB: {record}")
+        except Exception as e:
+            logger.error(f"Error storing token usage in MongoDB: {e}")
 
-@app.route('/')
-def index():
-    return jsonify({
-        "message": "PDF Document Splitter API",
-        "version": "1.0",
-        "endpoints": {
-            "/process": "POST - Process documents in a folder",
-            "/health": "GET - Health check"
-        }
-    })
+def get_args():
+    """Parse command line arguments for subprocess interaction."""
+    parser = argparse.ArgumentParser(description="Process folder and output results with timestamp.")
+    parser.add_argument('input_folder_path', type=str, help='Path to the input folder (or JSON file with folder_path)')
+    parser.add_argument('timestamp', type=str, help='Timestamp string for output file naming')
+    args = parser.parse_args()
+    return args.input_folder_path, args.timestamp
 
-@app.route('/health')
-def health_check():
-    return jsonify({"status": "healthy", "message": "API is running"})
 
-@app.route('/process', methods=['POST'])
-def process_documents():
-    """Process documents in the provided folder path"""
+def process_folder_subprocess(input_json: dict, timestamp: str) -> str:
+    """
+    Subprocess entry point for frontend-backend interaction.
+    input_json: dict loaded from JSON file, must contain 'folder_path'.
+    timestamp: string for output file naming.
+    Writes output to file and returns '1' as string on completion.
+    """
+    output = {}
     try:
-        data = request.get_json()
-        if not data or 'folder_path' not in data:
-            return jsonify({
-                "error": "folder_path is required in request body"
-            }), 400
-        folder_path = data['folder_path']
-        # Validate folder path
-        if not os.path.exists(folder_path):
-            return jsonify({
-                "error": f"Folder path does not exist: {folder_path}"
-            }), 400
-        if not os.path.isdir(folder_path):
-            return jsonify({
-                "error": f"Path is not a directory: {folder_path}"
-            }), 400
-        # Process the folder
-        logger.info(f"Processing folder: {folder_path}")
+        folder_path = input_json.get('folder_path')
+        if not folder_path:
+            raise ValueError('folder_path missing in input JSON')
+        
+        processor = DocumentProcessor()
         results = processor.process_folder(folder_path)
-        # Log the full results to a file for debugging
-        with open('processing.log', 'a', encoding='utf-8') as log_file:
-            log_file.write(json.dumps(results, indent=2))
-            log_file.write('\n')
-        # Prepare output file info
-        output_files = []
-        # For split PDFs (output_files)
-        input_tokens = None
-        output_tokens = None
-        total_tokens = None
+        
+        # Transform results into the desired output format
+        output_files_transformed = []
+        input_tokens, output_tokens, total_tokens = None, None, None
+
+        # Process successfully split multi-page PDFs
         for f in results.get('output_files', []):
-            # Try to get token info from analysis if available
-            input_tokens = f.get('input_tokens', None)
-            output_tokens = f.get('output_tokens', None)
-            total_tokens = f.get('total_tokens', None)
-            # Determine is_multipage
+            input_tokens = f.get('input_tokens')
+            output_tokens = f.get('output_tokens')
+            total_tokens = f.get('total_tokens')
             page_numbers = f.get('page_numbers', [])
-            is_multipage = len(page_numbers) > 1 if page_numbers else None
-            output_files.append({
+            is_multipage = len(page_numbers) > 1
+            output_files_transformed.append({
                 'path': f['path'],
                 'is_multipage': is_multipage
             })
-        # For images and single-page PDFs (skipped_files)
+        
+        # Include skipped single-page PDFs and images in the output
         for skipped in results.get('skipped_files', []):
-            if skipped.get('reason', '').startswith('Image file') or skipped.get('reason', '').startswith('Single page PDF'):
-                is_multipage = False
-                output_files.append({
+            if 'path' in skipped:
+                output_files_transformed.append({
                     'path': skipped['path'],
-                    'is_multipage': is_multipage
+                    'is_multipage': False
                 })
-        # Set top-level tokens to 0 if not set
-        return jsonify({
+
+        # Store token usage in MongoDB
+        processor.store_token_usage(
+            input_tokens if input_tokens is not None else 0,
+            output_tokens if output_tokens is not None else 0,
+            total_tokens if total_tokens is not None else 0,
+            context={"folder_path": folder_path, "timestamp": timestamp}
+        )
+        
+        output = {
             "status": "success",
-            "output_files": output_files,
+            "status_code": "200",
+            "output_files": output_files_transformed,
             "input_tokens": input_tokens if input_tokens is not None else 0,
             "output_tokens": output_tokens if output_tokens is not None else 0,
-            "total_tokens": total_tokens if total_tokens is not None else 0
-        })
+            "total_tokens": total_tokens if total_tokens is not None else 0,
+        }
+        
     except Exception as e:
-        logger.error(f"Error processing documents: {e}")
-        return jsonify({
-            "error": str(e),
-            "status": "error"
-        }), 500
+        output = {
+            "status": "error",
+            "status_code": "500",
+            'error': str(e)
+        }
+    
+    # Write the final transformed output to a file
+    output_filename = f"file_{timestamp}.json"
+    with open(output_filename, 'w', encoding='utf-8') as f:
+        json.dump(output, f, indent=2)
+    
+    return str(1)
 
-@app.route('/analyze', methods=['POST'])
-def analyze_single_pdf():
-    """Analyze a single PDF file"""
-    try:
-        data = request.get_json()
-        
-        if not data or 'pdf_path' not in data:
-            return jsonify({
-                "error": "pdf_path is required in request body"
-            }), 400
-        
-        pdf_path = data['pdf_path']
-        
-        # Validate PDF path
-        if not os.path.exists(pdf_path):
-            return jsonify({
-                "error": f"PDF file does not exist: {pdf_path}"
-            }), 400
-        
-        if not processor.is_pdf_file(pdf_path):
-            return jsonify({
-                "error": f"File is not a PDF: {pdf_path}"
-            }), 400
-        
-        # Analyze the PDF
-        logger.info(f"Analyzing PDF: {pdf_path}")
-        analysis_result = processor.analyze_pdf_with_gemini(pdf_path)
-        
-        return jsonify({
-            "status": "success",
-            "message": "Analysis completed",
-            "analysis": analysis_result
-        })
-        
-    except Exception as e:
-        logger.error(f"Error analyzing PDF: {e}")
-        return jsonify({
-            "error": str(e),
-            "status": "error"
-        }), 500
+# --- Removed Flask app initialization and route handlers ---
 
 if __name__ == '__main__':
-    # Check if Gemini API key is set
-    if GEMINI_API_KEY == 'your-gemini-api-key-here':
-        print("⚠️  Warning: Please set your GEMINI_API_KEY environment variable")
-        print("   export GEMINI_API_KEY='your-actual-api-key'")
+    """
+    This block allows the script to be run from the command line,
+    making it usable as a subprocess.
+    """
+    input_path, timestamp = get_args()
     
-    app.run(debug=True, host='0.0.0.0', port=5000)
+    try:
+        with open(input_path, 'r', encoding='utf-8') as f:
+            input_data = json.load(f)
+        # Call the processing function, which handles all output file writing
+        process_folder_subprocess(input_data, timestamp)
+    except Exception as e:
+        # Write the actual error to the output file for transparency
+        output = {
+            "status": "error",
+            "status_code": "500",
+            'error': f"Failed to execute subprocess: {e}"
+        }
+        output_filename = f"file_{timestamp}.json"
+        with open(output_filename, 'w', encoding='utf-8') as f:
+            json.dump(output, f, indent=2)
