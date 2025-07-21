@@ -36,16 +36,22 @@ def process_documents():
         data = request.get_json()
         if not data or 'folder_path' not in data:
             return jsonify({
+                "status": "error",
+                "status_code": "400",
                 "error": "folder_path is required in request body"
             }), 400
         folder_path = data['folder_path']
         # Validate folder path
         if not os.path.exists(folder_path):
             return jsonify({
+                "status": "error",
+                "status_code": "400",
                 "error": f"Folder path does not exist: {folder_path}"
             }), 400
         if not os.path.isdir(folder_path):
             return jsonify({
+                "status": "error",
+                "status_code": "400",
                 "error": f"Path is not a directory: {folder_path}"
             }), 400
         # Prepare temp input JSON file
@@ -62,11 +68,20 @@ def process_documents():
             subprocess.run(subprocess_cmd, check=True)
         except subprocess.CalledProcessError as e:
             logging.error(f"Subprocess failed: {e}")
-            return jsonify({"error": "Subprocess failed", "details": str(e)}), 500
+            return jsonify({
+                "status": "error",
+                "status_code": "500",
+                "error": "Subprocess failed",
+                "details": str(e)
+            }), 500
         # Read output JSON file
         output_filename = f"file_{timestamp}.json"
         if not os.path.exists(output_filename):
-            return jsonify({"error": f"Output file not found: {output_filename}"}), 500
+            return jsonify({
+                "status": "error",
+                "status_code": "500",
+                "error": f"Output file not found: {output_filename}"
+            }), 500
         with open(output_filename, 'r', encoding='utf-8') as f:
             output_data = json.load(f)
         # Clean up temp files
@@ -77,8 +92,9 @@ def process_documents():
     except Exception as e:
         logging.error(f"Error processing documents: {e}")
         return jsonify({
-            "error": str(e),
-            "status": "error"
+            "status": "error",
+            "status_code": "500",
+            "error": str(e)
         }), 500
 
 if __name__ == '__main__':

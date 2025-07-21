@@ -124,7 +124,8 @@ If an error occurs (e.g., folder not found, processing failure), the API will re
 
 ```json
 {
-    "error": "Folder path does not exist: D:\\path\\to\\non_existent_folder",
-    "status": "error"
+    "status": "error",
+    "status_code": "400",
+    "error": "Folder path does not exist: D:\\path\\to\\non_existent_folder"
 }
 ```
