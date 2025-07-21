@@ -21,6 +21,7 @@ def index():
         "version": "1.0",
         "endpoints": {
             "/process": "POST - Process documents in a folder",
+            "/cut_pdf": "POST - Cut PDF by page numbers",
             "/health": "GET - Health check"
         }
     })
@@ -91,6 +92,113 @@ def process_documents():
         return jsonify(output_data)
     except Exception as e:
         logging.error(f"Error processing documents: {e}")
+        return jsonify({
+            "status": "error",
+            "status_code": "500",
+            "error": str(e)
+        }), 500
+
+@app.route('/cut_pdf', methods=['POST'])
+def cut_pdf():
+    """Cut a PDF file by page numbers."""
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({
+                "status": "error",
+                "status_code": "400",
+                "error": "Request body is required"
+            }), 400
+        
+        # Validate required parameters
+        required_fields = ['folder_path', 'start_page', 'end_page']
+        for field in required_fields:
+            if field not in data:
+                return jsonify({
+                    "status": "error",
+                    "status_code": "400",
+                    "error": f"{field} is required in request body"
+                }), 400
+        
+        folder_path = data['folder_path']
+        start_page = data['start_page']
+        end_page = data['end_page']
+        
+        # Validate folder path
+        if not os.path.exists(folder_path):
+            return jsonify({
+                "status": "error",
+                "status_code": "400",
+                "error": f"Folder path does not exist: {folder_path}"
+            }), 400
+        if not os.path.isdir(folder_path):
+            return jsonify({
+                "status": "error",
+                "status_code": "400",
+                "error": f"Path is not a directory: {folder_path}"
+            }), 400
+        
+        # Validate page numbers
+        if not isinstance(start_page, int) or not isinstance(end_page, int):
+            return jsonify({
+                "status": "error",
+                "status_code": "400",
+                "error": "start_page and end_page must be integers"
+            }), 400
+        
+        if start_page < 1 or end_page < 1:
+            return jsonify({
+                "status": "error",
+                "status_code": "400",
+                "error": "Page numbers must be positive integers"
+            }), 400
+        
+        if start_page > end_page:
+            return jsonify({
+                "status": "error",
+                "status_code": "400",
+                "error": "start_page must be less than or equal to end_page"
+            }), 400
+        
+        # Find PDF files in the folder
+        pdf_files = []
+        for filename in os.listdir(folder_path):
+            if filename.lower().endswith('.pdf'):
+                pdf_files.append(os.path.join(folder_path, filename))
+        
+        if not pdf_files:
+            return jsonify({
+                "status": "error",
+                "status_code": "400",
+                "error": "No PDF files found in the specified folder"
+            }), 400
+        
+        # Process the first PDF file found
+        pdf_path = pdf_files[0]
+        
+        # Create DocumentProcessor instance and cut the PDF
+        processor = DocumentProcessor()
+        output_path = processor.cut_pdf_by_page_numbers(pdf_path, start_page, end_page)
+        
+        if output_path is None:
+            return jsonify({
+                "status": "error",
+                "status_code": "500",
+                "error": "Failed to cut PDF file"
+            }), 500
+        
+        return jsonify({
+            "status": "success",
+            "status_code": "200",
+            "original_pdf": pdf_path,
+            "cut_pdf_path": output_path,
+            "start_page": start_page,
+            "end_page": end_page,
+            "message": f"Successfully cut PDF from page {start_page} to {end_page}"
+        })
+        
+    except Exception as e:
+        logging.error(f"Error cutting PDF: {e}")
         return jsonify({
             "status": "error",
             "status_code": "500",

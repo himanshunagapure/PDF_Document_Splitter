@@ -98,37 +98,38 @@ class DocumentProcessor:
     def analyze_pdf_with_gemini(self, pdf_path: str) -> Dict[str, Any]:
         """Analyze PDF with Gemini and get document structure, including token usage if available"""
         try:
+            page_count = self.get_pdf_page_count(pdf_path)
+            if page_count == 0:
+                return {"error": "PDF has no pages or could not be read."}
+
             # Convert PDF to images
             images = self.pdf_to_images(pdf_path)
             if not images:
                 return {"error": "Failed to convert PDF to images"}
             # Prepare the prompt
-            prompt = """
-            Analyze this multi-page PDF document and identify different types of documents within it.
+            prompt = f"""
+            Analyze this multi-page PDF document, which has {page_count} pages, and identify all the distinct documents within it.
             For each document type you identify, provide:
-            1. document_type: The type of document (e.g., "Aadhar Card", "Passport", "Bank Statement", "Invoice", etc.)
-            2. page_numbers: Array of page numbers that belong to this document (1-indexed)
-            3. suggested_filename: A clean filename for this document (without extension)
-            4. reason: Brief explanation of why you identified this as this document type
+            1. document_type: The type of document (e.g., "Aadhar Card", "Passport", "Bank Statement", "Invoice", etc.).
+            2. page_numbers: Array of page numbers that belong to this document (1-indexed).
+            3. suggested_filename: A clean filename for this document (without extension).
+            4. reason: Brief explanation of why you identified this as this document type.
+
             Return the response as a JSON object with this structure:
-            {
+            {{
                 "documents": [
-                    {
+                    {{
                         "document_type": "Document Type",
                         "page_numbers": [1, 2],
                         "suggested_filename": "document_name",
                         "reason": "Explanation of identification"
-                    }
+                    }}
                 ],
-                "total_pages": number_of_pages,
+                "total_pages": {page_count},
                 "analysis_confidence": "high/medium/low"
-            }
-            Be thorough in your analysis and look for:
-            - Headers, logos, and official markings
-            - Document structure and layout
-            - Text content and formatting
-            - Page continuity and relationships
-            Ensure page numbers are accurate and don't overlap between different documents and don't skip any page.
+            }}
+
+            IMPORTANT: You must account for every single page. The 'page_numbers' in your response must collectively include all pages from 1 to {page_count}. Do not skip any pages. If you cannot classify a page, group it with other unclassified pages into a single document with the type "Unclassified Document".
             """
             # Prepare images for Gemini
             image_parts = []
@@ -191,6 +192,55 @@ class DocumentProcessor:
                 
         except Exception as e:
             logger.error(f"Error splitting PDF: {e}")
+            return None
+    
+    def cut_pdf_by_page_numbers(self, pdf_path: str, start_page: int, end_page: int) -> str:
+        """
+        Cuts a PDF from start_page to end_page and saves it in the same folder.
+
+        Args:
+            pdf_path (str): The path to the input PDF file.
+            start_page (int): The starting page number (1-indexed).
+            end_page (int): The ending page number (1-indexed).
+
+        Returns:
+            str: The path to the newly created PDF file, or None if an error occurred.
+        """
+        try:
+            if not os.path.exists(pdf_path):
+                logger.error(f"PDF file not found at: {pdf_path}")
+                return None
+
+            output_dir = os.path.dirname(pdf_path)
+            original_filename = os.path.splitext(os.path.basename(pdf_path))[0]
+            # Create a filename for the new split PDF
+            new_filename = f"{original_filename}_pages_{start_page}_to_{end_page}"
+            
+            with open(pdf_path, 'rb') as file:
+                pdf_reader = PdfReader(file)
+                total_pages = len(pdf_reader.pages)
+
+                # Validate page numbers
+                if not (1 <= start_page <= end_page <= total_pages):
+                    logger.error(f"Invalid page range for PDF with {total_pages} pages: start={start_page}, end={end_page}")
+                    return None
+
+                pdf_writer = PdfWriter()
+
+                # Add pages to the writer object
+                for page_num in range(start_page - 1, end_page):
+                    pdf_writer.add_page(pdf_reader.pages[page_num])
+
+                # Save the new PDF
+                output_path = os.path.join(output_dir, f"{new_filename}.pdf")
+                with open(output_path, 'wb') as output_file:
+                    pdf_writer.write(output_file)
+
+                logger.info(f"Successfully created cut PDF: {output_path}")
+                return output_path
+
+        except Exception as e:
+            logger.error(f"Error cutting PDF: {e}")
             return None
     
     def process_folder(self, folder_path: str) -> Dict[str, Any]:
@@ -281,24 +331,46 @@ class DocumentProcessor:
         return results
     
     def split_pdf_documents(self, pdf_path: str, analysis_result: Dict[str, Any], output_dir: str) -> list:
-        """Split PDF into individual documents based on analysis, propagate token info"""
+        """Split PDF into individual documents based on analysis, propagate token info, and ensure no pages are missed."""
         output_files = []
         try:
             documents = analysis_result.get("documents", [])
+            total_pages_in_pdf = self.get_pdf_page_count(pdf_path)
+
+            # Collect all page numbers from the analysis
+            processed_pages = set()
+            for doc in documents:
+                for page_num in doc.get("page_numbers", []):
+                    processed_pages.add(page_num)
+
+            # Identify unclassified pages (from LLM output)
+            all_pages = set(range(1, total_pages_in_pdf + 1))
+            unclassified_pages = sorted(list(all_pages - processed_pages))
+
+            # If there are unclassified pages, add them as a new document
+            if unclassified_pages:
+                documents.append({
+                    "document_type": "Unclassified Document",
+                    "page_numbers": unclassified_pages,
+                    "suggested_filename": "unclassified_document",
+                    "reason": "Pages not classified by the model."
+                })
+                logger.warning(f"Found {len(unclassified_pages)} unclassified pages: {unclassified_pages}")
+
             # Get the original combined filename (without extension)
             original_filename = os.path.splitext(os.path.basename(pdf_path))[0]
             # Get token info from analysis_result
             input_tokens = analysis_result.get('input_tokens')
             output_tokens = analysis_result.get('output_tokens')
             total_tokens = analysis_result.get('total_tokens')
+            written_pages = set()
             for doc in documents:
                 page_numbers = doc.get("page_numbers", [])
-                suggested_filename = doc.get("suggested_filename", "document")
                 document_type = doc.get("document_type", "Unknown")
                 if not page_numbers:
                     continue
                 # Slugify document_type: lowercase, replace spaces with hyphens
-                doc_type_slug = document_type.lower().replace(' ', '-')
+                doc_type_slug = doc.get("document_type", "unknown").lower().replace(' ', '-').replace('_', '-')
                 # Page numbers as dash-joined string
                 page_numbers_str = "-".join(str(p) for p in sorted(page_numbers))
                 # Compose new filename
@@ -316,12 +388,43 @@ class DocumentProcessor:
                         "path": output_path,
                         "document_type": document_type,
                         "page_numbers": page_numbers,
-                        "original_filename": suggested_filename,
+                        "original_file_path": pdf_path,
+                        "original_filename": doc.get("suggested_filename", "document"),
                         "input_tokens": input_tokens,
                         "output_tokens": output_tokens,
                         "total_tokens": total_tokens
                     })
+                    written_pages.update(page_numbers)
                     logger.info(f"Created: {output_path}")
+
+            # --- Post-split verification: ensure all pages are present ---
+            missing_after_split = sorted(list(all_pages - written_pages))
+            if missing_after_split:
+                logger.error(f"Pages missing after split: {missing_after_split}. Creating extra Unclassified Document PDF.")
+                # Compose new filename
+                doc_type_slug = "unclassified-document"
+                page_numbers_str = "-".join(str(p) for p in missing_after_split)
+                new_filename = f"{original_filename}_{doc_type_slug}_{page_numbers_str}"
+                output_path = self.split_pdf_by_pages(
+                    pdf_path,
+                    (min(missing_after_split), max(missing_after_split)),
+                    output_dir,
+                    new_filename
+                )
+                if output_path:
+                    output_files.append({
+                        "filename": os.path.basename(output_path),
+                        "path": output_path,
+                        "document_type": "Unclassified Document (post-check)",
+                        "page_numbers": missing_after_split,
+                        "original_file_path": pdf_path,
+                        "original_filename": "unclassified_document_post_check",
+                        "input_tokens": input_tokens,
+                        "output_tokens": output_tokens,
+                        "total_tokens": total_tokens
+                    })
+                    logger.info(f"Created (post-check): {output_path}")
+
         except Exception as e:
             logger.error(f"Error splitting PDF documents: {e}")
         return output_files
@@ -376,15 +479,23 @@ def process_folder_subprocess(input_json: dict, timestamp: str) -> str:
             total_tokens = f.get('total_tokens')
             page_numbers = f.get('page_numbers', [])
             is_multipage = len(page_numbers) > 1
-            output_files_transformed.append({
+            
+            file_info = {
+                'original_file_path': f.get('original_file_path'),
                 'path': f['path'],
                 'is_multipage': is_multipage
-            })
+            }
+            if is_multipage:
+                file_info['start_page'] = min(page_numbers)
+                file_info['end_page'] = max(page_numbers)
+            
+            output_files_transformed.append(file_info)
         
         # Include skipped single-page PDFs and images in the output
         for skipped in results.get('skipped_files', []):
             if 'path' in skipped:
                 output_files_transformed.append({
+                    'original_file_path': skipped['path'],
                     'path': skipped['path'],
                     'is_multipage': False
                 })

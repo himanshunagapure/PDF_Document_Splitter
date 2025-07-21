@@ -100,21 +100,27 @@ If successful, the API returns a JSON object with the status, a list of all outp
     "status_code": "200",
     "output_files": [
         {
-            "path": "D:\\path\\to\\your\\documents\\document_1_aadhar-card_7.pdf",
-            "is_multipage": true
-        },
-        {
-            "path": "D:\\path\\to\\your\\documents\\document_1_pan-card_8.pdf",
+            "original_file_path": "D:\\AIQoD\\Projects\\document-splitter\\solo_test2\\Aditya_BGV Doc_250617_163101.pdf",
+            "path": "D:\\AIQoD\\Projects\\document-splitter\\solo_test2\\Aditya_BGV Doc_250617_163101_list-of-acceptable-documents_1.pdf",
             "is_multipage": false
         },
         {
-            "path": "D:\\path\\to\\your\\documents\\some_image.jpg",
+            "original_file_path": "D:\\AIQoD\\Projects\\document-splitter\\solo_test2\\Aditya_BGV Doc_250617_163101.pdf",
+            "path": "D:\\AIQoD\\Projects\\document-splitter\\solo_test2\\Aditya_BGV Doc_250617_163101_employment-verification-form_2-3-4-5.pdf",
+            "is_multipage": true,
+            "start_page": 2,
+            "end_page": 5
+        },
+        {
+            "original_file_path": "D:\\AIQoD\\Projects\\document-splitter\\solo_test2\\Aditya_BGV Doc_250617_163101.pdf",
+            "path": "D:\\AIQoD\\Projects\\document-splitter\\solo_test2\\Aditya_BGV Doc_250617_163101_employment-screening-consent_6.pdf",
             "is_multipage": false
-        }
+        },
+        // ... more output files ...
     ],
-    "input_tokens": 1520,
-    "output_tokens": 350,
-    "total_tokens": 1870
+    "input_tokens": 5980,
+    "output_tokens": 1216,
+    "total_tokens": 10449
 }
 ```
 
@@ -129,3 +135,67 @@ If an error occurs (e.g., folder not found, processing failure), the API will re
     "error": "Folder path does not exist: D:\\path\\to\\non_existent_folder"
 }
 ```
+
+---
+
+### Cut a PDF by Page Numbers
+
+-   **Endpoint**: `/cut_pdf`
+-   **Method**: `POST`
+-   **Description**: Cuts a PDF file in the specified folder from a given start page to an end page and returns the new file path. This is a direct, page-range-based cut (no AI analysis or document classification).
+
+#### Request Body
+
+The request must be a JSON object containing:
+
+-   `folder_path`: The absolute path to the folder containing the PDF(s).
+-   `start_page`: The starting page number (1-indexed).
+-   `end_page`: The ending page number (1-indexed).
+
+Example:
+
+```json
+{
+    "folder_path": "D:\\path\\to\\your\\documents",
+    "start_page": 1,
+    "end_page": 5
+}
+```
+
+#### Success Response (`200 OK`)
+
+If successful, the API returns a JSON object with the status and the path to the new cut PDF file. Token counts are always zero for this endpoint, as no AI analysis is performed.
+
+```json
+{
+    "status": "success",
+    "status_code": "200",
+    "output_files": [
+        {
+            "path": "D:\\path\\to\\your\\documents\\document_1_aadhar-card_7.pdf"
+        }
+    ],
+    "input_tokens": 0,
+    "output_tokens": 0,
+    "total_tokens": 0
+}
+```
+
+#### Error Response
+
+If an error occurs (e.g., folder not found, invalid page range), the API will return a JSON object with an error message.
+
+```json
+{
+    "status": "error",
+    "status_code": "400",
+    "error": "No PDF files found in the specified folder"
+}
+```
+
+---
+
+### Endpoint Comparison
+
+-   **`/process`**: Uses Gemini AI to analyze and split all PDFs in a folder into logical documents, returning detailed file info and token usage.
+-   **`/cut_pdf`**: Directly cuts a single PDF by page range (no AI), returning the new file path. Token usage is always zero for this endpoint.
