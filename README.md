@@ -138,58 +138,87 @@ If an error occurs (e.g., folder not found, processing failure), the API will re
 
 ---
 
-### Cut a PDF by Page Numbers
+### Cut PDFs by Custom Page Ranges and Filenames
 
 -   **Endpoint**: `/cut_pdf`
 -   **Method**: `POST`
--   **Description**: Cuts a PDF file in the specified folder from a given start page to an end page and returns the new file path. This is a direct, page-range-based cut (no AI analysis or document classification).
+-   **Description**: Splits one or more PDFs according to a list of instructions (page ranges, filenames, etc). This is a direct, page-range-based cut (no AI analysis or document classification).
 
 #### Request Body
 
-The request must be a JSON object containing:
+The request must be a JSON object containing a `final_paths` key, which is a list of split instructions. Each instruction should be an object with the following fields:
 
--   `folder_path`: The absolute path to the folder containing the PDF(s).
--   `start_page`: The starting page number (1-indexed).
--   `end_page`: The ending page number (1-indexed).
+-   `original_file_path`: Absolute path to the source PDF file.
+-   `old_file_path`: Path to the file being split (can be same as original_file_path, or a temp file if chaining splits).
+-   `start_page`: Starting page number (1-indexed, inclusive).
+-   `end_page`: Ending page number (1-indexed, inclusive).
+-   `pdf_name`: Name to use in the new split file (string, e.g. 'aadhar-card').
+-   `is_modify`: Boolean or string ('true'/'false'). If true, deletes the old_file_path after splitting.
 
 Example:
 
 ```json
 {
-    "folder_path": "D:\\path\\to\\your\\documents",
-    "start_page": 1,
-    "end_page": 5
+    "final_paths": [
+        {
+            "original_file_path": "D:\\AIQoD\\Projects\\document-splitter\\solo_test1\\BGV - Mahendra Mahilange.pdf",
+            "old_file_path": "D:\\AIQoD\\Projects\\document-splitter\\solo_test1\\BGV - Mahendra Mahilange.pdf",
+            "start_page": 7,
+            "end_page": 7,
+            "pdf_name": "aadhar-card",
+            "is_modify": false
+        },
+        {
+            "original_file_path": "D:\\AIQoD\\Projects\\document-splitter\\solo_test1\\BGV - Mahendra Mahilange.pdf",
+            "old_file_path": "D:\\AIQoD\\Projects\\document-splitter\\solo_test1\\BGV - Mahendra Mahilange.pdf",
+            "start_page": 8,
+            "end_page": 8,
+            "pdf_name": "pan-card",
+            "is_modify": false
+        }
+    ]
 }
 ```
 
 #### Success Response (`200 OK`)
 
-If successful, the API returns a JSON object with the status and the path to the new cut PDF file. Token counts are always zero for this endpoint, as no AI analysis is performed.
+If successful, the API returns a JSON object with the split file paths and any errors encountered:
 
 ```json
 {
-    "status": "success",
-    "status_code": "200",
-    "output_files": [
-        {
-            "path": "D:\\path\\to\\your\\documents\\document_1_aadhar-card_7.pdf"
-        }
-    ],
-    "input_tokens": 0,
-    "output_tokens": 0,
-    "total_tokens": 0
+    "output": {
+        "split_pdf_array": [
+            "D:\\AIQoD\\Projects\\document-splitter\\solo_test1\\BGV - Mahendra Mahilange_aadhar-card_7_7.pdf",
+            "D:\\AIQoD\\Projects\\document-splitter\\solo_test1\\BGV - Mahendra Mahilange_pan-card_8_8.pdf"
+        ]
+    }
+}
+```
+
+If there are errors (e.g., invalid page range, missing file), they will be included in an `errors` array:
+
+```json
+{
+    "output": {
+        "split_pdf_array": [
+            "D:\\AIQoD\\Projects\\document-splitter\\solo_test1\\BGV - Mahendra Mahilange_aadhar-card_7_7.pdf"
+        ]
+    },
+    "errors": [
+        "Invalid page range 100-200 for file D:\\AIQoD\\Projects\\document-splitter\\solo_test1\\BGV - Mahendra Mahilange.pdf (total pages: 24)"
+    ]
 }
 ```
 
 #### Error Response
 
-If an error occurs (e.g., folder not found, invalid page range), the API will return a JSON object with an error message.
+If the request is malformed (e.g., missing `final_paths`), the API will return an error message:
 
 ```json
 {
     "status": "error",
     "status_code": "400",
-    "error": "No PDF files found in the specified folder"
+    "error": "Request body must contain 'final_paths' key (list of split instructions)"
 }
 ```
 
@@ -198,4 +227,4 @@ If an error occurs (e.g., folder not found, invalid page range), the API will re
 ### Endpoint Comparison
 
 -   **`/process`**: Uses Gemini AI to analyze and split all PDFs in a folder into logical documents, returning detailed file info and token usage.
--   **`/cut_pdf`**: Directly cuts a single PDF by page range (no AI), returning the new file path. Token usage is always zero for this endpoint.
+-   **`/cut_pdf`**: Directly splits PDFs by custom page ranges and filenames (no AI), returning the new file paths. Token usage is not tracked for this endpoint.
