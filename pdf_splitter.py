@@ -445,15 +445,15 @@ class DocumentProcessor:
 
     def split_pdfs_by_final_paths(self, final_paths: list) -> dict:
         """
-        Splits PDFs as per the final_paths input list.
+        Splits PDFs as per the flat list of cut instructions (each with original_file_path, start_page, end_page, pdf_name, is_modify).
         Returns a dict with 'split_pdf_array' and 'errors'.
+        Note: Deletion of old files is handled outside this function.
         """
         split_pdf_array = []
         errors = []
         for item in final_paths:
             try:
                 original_file_path = item.get('original_file_path')
-                old_file_path = item.get('old_file_path')
                 start_page = int(item.get('start_page'))
                 end_page = int(item.get('end_page'))
                 pdf_name = item.get('pdf_name', 'section')
@@ -464,7 +464,7 @@ class DocumentProcessor:
                 else:
                     is_modify_bool = bool(is_modify)
 
-                if not (original_file_path and old_file_path and start_page and end_page and pdf_name):
+                if not (original_file_path and start_page and end_page and pdf_name):
                     errors.append(f"Missing required fields in item: {item}")
                     continue
 
@@ -472,15 +472,10 @@ class DocumentProcessor:
                     errors.append(f"Original file not found: {original_file_path}")
                     continue
 
-                if not is_modify_bool:
-                    # If is_modify is false, just pass the old_file_path as is
-                    split_pdf_array.append(old_file_path)
-                    continue
-
                 # Prepare new file name
-                old_base = os.path.splitext(os.path.basename(old_file_path))[0]
-                folder = os.path.dirname(old_file_path)
-                new_file_name = f"{old_base}_{pdf_name}_{start_page}_{end_page}.pdf"
+                original_base = os.path.splitext(os.path.basename(original_file_path))[0]
+                folder = os.path.dirname(original_file_path)
+                new_file_name = f"{original_base}_{pdf_name}_{start_page}_{end_page}.pdf"
                 new_file_path = os.path.join(folder, new_file_name)
 
                 # Split PDF
@@ -496,13 +491,6 @@ class DocumentProcessor:
                     with open(new_file_path, 'wb') as outfile:
                         writer.write(outfile)
                 split_pdf_array.append(new_file_path)
-
-                # Delete old_file_path if is_modify is True and file exists
-                if is_modify_bool and os.path.exists(old_file_path):
-                    try:
-                        os.remove(old_file_path)
-                    except Exception as del_err:
-                        errors.append(f"Failed to delete {old_file_path}: {del_err}")
             except Exception as e:
                 errors.append(f"Error processing item {item}: {e}")
         return {"split_pdf_array": split_pdf_array, "errors": errors}

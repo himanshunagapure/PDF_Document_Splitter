@@ -102,7 +102,7 @@ def process_documents():
 
 @app.route('/cut_pdf', methods=['POST'])
 def cut_pdf():
-    """Cut PDFs as per the final_paths input array."""
+    """Cut PDFs as per the new grouped final_paths input array."""
     try:
         data = request.get_json()
         if not data or 'final_paths' not in data:
@@ -118,11 +118,44 @@ def cut_pdf():
                 "status_code": "400",
                 "error": "'final_paths' must be a list"
             }), 400
+
+        # Flatten the grouped structure into a list of cut instructions
+        flat_cuts = []
+        all_old_file_paths = set()
+        for group in final_paths:
+            original_file_path = group.get('original_file_path')
+            cuts = group.get('cuts', [])
+            old_file_paths = group.get('old_file_paths', [])
+            for cut in cuts:
+                flat_cuts.append({
+                    'original_file_path': original_file_path,
+                    'start_page': cut.get('start_page'),
+                    'end_page': cut.get('end_page'),
+                    'pdf_name': cut.get('pdf_name'),
+                    'is_modify': cut.get('is_modify'),
+                })
+            for old_path in old_file_paths:
+                all_old_file_paths.add(old_path)
+
         processor = DocumentProcessor()
-        result = processor.split_pdfs_by_final_paths(final_paths)
+        result = processor.split_pdfs_by_final_paths(flat_cuts)
         output = {"output": {"split_pdf_array": result.get("split_pdf_array", [])}}
         if result.get("errors"):
             output["errors"] = result["errors"]
+
+        # Delete all old_file_paths after processing
+        delete_errors = []
+        for old_path in all_old_file_paths:
+            try:
+                if os.path.exists(old_path):
+                    os.remove(old_path)
+            except Exception as e:
+                delete_errors.append(f"Failed to delete {old_path}: {e}")
+        if delete_errors:
+            if "errors" not in output:
+                output["errors"] = []
+            output["errors"].extend(delete_errors)
+
         return jsonify(output)
     except Exception as e:
         logging.error(f"Error in /cut_pdf: {e}")

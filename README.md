@@ -142,43 +142,59 @@ If an error occurs (e.g., folder not found, processing failure), the API will re
 
 -   **Endpoint**: `/cut_pdf`
 -   **Method**: `POST`
--   **Description**: Splits one or more PDFs according to a list of instructions (page ranges, filenames, etc). This is a direct, page-range-based cut (no AI analysis or document classification).
+-   **Description**: Splits one or more PDFs according to a list of grouped instructions (page ranges, filenames, etc). This is a direct, page-range-based cut (no AI analysis or document classification).
 
 #### Request Body
 
-The request must be a JSON object containing a `final_paths` key, which is a list of split instructions. Each instruction should be an object with the following fields:
+The request must be a JSON object containing a `final_paths` key, which is a list of **groups**. Each group should be an object with the following fields:
 
 -   `original_file_path`: Absolute path to the source PDF file.
--   `old_file_path`: Path to the file being split (can be same as original_file_path, or a temp file if chaining splits).
--   `start_page`: Starting page number (1-indexed, inclusive).
--   `end_page`: Ending page number (1-indexed, inclusive).
--   `pdf_name`: Name to use in the new split file (string, e.g. 'aadhar-card').
--   `is_modify`: Boolean or string ('true'/'false'). If true, deletes the old_file_path after splitting.
+-   `cuts`: Array of cut instructions for this source file. Each cut is an object with:
+    -   `start_page`: Starting page number (1-indexed, inclusive).
+    -   `end_page`: Ending page number (1-indexed, inclusive).
+    -   `pdf_name`: Name to use in the new split file (string, e.g. 'aadhar-card').
+    -   `is_modify`: Boolean or string ('true'/'false'). If true, indicates this cut is a user modification.
+-   `old_file_paths`: Array of file paths to delete after all cuts are processed (e.g., previous split files that are now obsolete).
 
-Example:
+**Example:**
 
 ```json
 {
-    "final_paths": [
+  "final_paths": [
+    {
+      "original_file_path": "D:\\AIQoD\\Projects\\document-splitter\\solo_test1\\BGV - Mahendra Mahilange.pdf",
+      "cuts": [
         {
-            "original_file_path": "D:\\AIQoD\\Projects\\document-splitter\\solo_test1\\BGV - Mahendra Mahilange.pdf",
-            "old_file_path": "D:\\AIQoD\\Projects\\document-splitter\\solo_test1\\BGV - Mahendra Mahilange.pdf",
-            "start_page": 7,
-            "end_page": 7,
-            "pdf_name": "aadhar-card",
-            "is_modify": false
+          "start_page": 10,
+          "end_page": 20,
+          "pdf_name": "higher-secondary-marksheets_10-20",
+          "is_modify": true
         },
         {
-            "original_file_path": "D:\\AIQoD\\Projects\\document-splitter\\solo_test1\\BGV - Mahendra Mahilange.pdf",
-            "old_file_path": "D:\\AIQoD\\Projects\\document-splitter\\solo_test1\\BGV - Mahendra Mahilange.pdf",
-            "start_page": 8,
-            "end_page": 8,
-            "pdf_name": "pan-card",
-            "is_modify": false
+          "start_page": 21,
+          "end_page": 22,
+          "pdf_name": "letter-of-appointment_21-22",
+          "is_modify": true
         }
-    ]
+      ],
+      "old_file_paths": [
+        "D:\\AIQoD\\Projects\\document-splitter\\solo_test1\\BGV - Mahendra Mahilange_higher-secondary-marksheets_10-11.pdf",
+        "D:\\AIQoD\\Projects\\document-splitter\\solo_test1\\BGV - Mahendra Mahilange_letter-of-appointment_19-20-21-22.pdf"
+      ]
+    }
+  ]
 }
 ```
+
+#### Field Explanations
+
+| Field                | Type     | Description                                                                 |
+|----------------------|----------|-----------------------------------------------------------------------------|
+| original_file_path   | string   | The full PDF to cut from                                                    |
+| cuts                 | array    | Array of new splits (start/end/pdf_name/is_modify)                          |
+| old_file_paths       | array    | Array of all old split files to delete after processing                     |
+
+**Note:** All files listed in `old_file_paths` will be deleted after the new cuts are made.
 
 #### Success Response (`200 OK`)
 
@@ -188,8 +204,8 @@ If successful, the API returns a JSON object with the split file paths and any e
 {
     "output": {
         "split_pdf_array": [
-            "D:\\AIQoD\\Projects\\document-splitter\\solo_test1\\BGV - Mahendra Mahilange_aadhar-card_7_7.pdf",
-            "D:\\AIQoD\\Projects\\document-splitter\\solo_test1\\BGV - Mahendra Mahilange_pan-card_8_8.pdf"
+            "D:\\AIQoD\\Projects\\document-splitter\\solo_test1\\BGV - Mahendra Mahilange_higher-secondary-marksheets_10-20_10_20.pdf",
+            "D:\\AIQoD\\Projects\\document-splitter\\solo_test1\\BGV - Mahendra Mahilange_letter-of-appointment_21-22_21_22.pdf"
         ]
     }
 }
@@ -201,11 +217,12 @@ If there are errors (e.g., invalid page range, missing file), they will be inclu
 {
     "output": {
         "split_pdf_array": [
-            "D:\\AIQoD\\Projects\\document-splitter\\solo_test1\\BGV - Mahendra Mahilange_aadhar-card_7_7.pdf"
+            "D:\\AIQoD\\Projects\\document-splitter\\solo_test1\\BGV - Mahendra Mahilange_higher-secondary-marksheets_10-20_10_20.pdf"
         ]
     },
     "errors": [
-        "Invalid page range 100-200 for file D:\\AIQoD\\Projects\\document-splitter\\solo_test1\\BGV - Mahendra Mahilange.pdf (total pages: 24)"
+        "Invalid page range 100-200 for file D:\\AIQoD\\Projects\\document-splitter\\solo_test1\\BGV - Mahendra Mahilange.pdf (total pages: 24)",
+        "Failed to delete D:\\AIQoD\\Projects\\document-splitter\\solo_test1\\BGV - Mahendra Mahilange_higher-secondary-marksheets_10-11.pdf: [error message]"
     ]
 }
 ```
